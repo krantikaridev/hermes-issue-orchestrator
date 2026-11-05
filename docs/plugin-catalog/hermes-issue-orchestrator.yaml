@@ -1,0 +1,27 @@
+# Draft catalog entry. Do not open the upstream PR until `sha` is the full
+# 40-character commit you want a maintainer to review. This file lives in
+# this repo so the submission text is ready; it is not installed by Hermes.
+name: hermes-issue-orchestrator
+repo: https://github.com/krantikaridev/hermes-issue-orchestrator
+sha: "0000000000000000000000000000000000000000"
+description: GitHub issues as Hermes's task queue, with a PAT in Hermes secrets by default.
+maintainer: krantikaridev
+tier: community
+category: automation
+requires_hermes: ">=0.22.0"
+version: "0.1.0"
+readme: true
+title: Hermes Issue Orchestrator
+known_issues:
+  - "Default repo krantikaridev/hermes-orchestrator-sandbox is an OPEN DECISION placeholder. Set the repo before use."
+  - "sha above is a draft placeholder. Replace it with the reviewed commit before opening the catalog PR."
+capabilities:
+  provides_tools:
+    - issue_claim
+    - issue_comment_progress
+    - issue_handoff
+  provides_hooks:
+    - post_llm_call
+    - post_api_request
+  provides_middleware: []
+  requires_env: []
