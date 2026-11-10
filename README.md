@@ -37,19 +37,13 @@ Requires Hermes `>=0.22.0`.
 
 ## Install
 
-From a clone of this repository:
+Hermes installs plugins from Git, so install from this public repository (pin a commit with `--ref <40-char sha>` if you want an exact version):
 
 ```bash
-hermes plugins install /path/to/hermes-issue-orchestrator
-hermes plugins enable hermes-issue-orchestrator
+hermes plugins install https://github.com/krantikaridev/hermes-issue-orchestrator --enable
 ```
 
-Or from GitHub, once this repo is public:
-
-```bash
-hermes plugins install https://github.com/krantikaridev/hermes-issue-orchestrator
-hermes plugins enable hermes-issue-orchestrator
-```
+Once the catalog entry is merged this becomes `hermes plugins install hermes-issue-orchestrator`.
 
 The install directory name should stay `hermes-issue-orchestrator`. Settings below use that id. `hermes plugins list` shows the id if a checkout used a different folder name.
 
@@ -139,8 +133,7 @@ PAT path only. Replace the repository if you are not using the sandbox placehold
 
 ```bash
 # 0:00
-hermes plugins install /path/to/hermes-issue-orchestrator
-hermes plugins enable hermes-issue-orchestrator
+hermes plugins install https://github.com/krantikaridev/hermes-issue-orchestrator --enable
 
 # 0:20 — paste the PAT when read waits; it is not echoed
 read -rs PAT
@@ -180,6 +173,10 @@ Catalog admission, from a Hermes checkout:
 ```bash
 hermes plugins validate /path/to/hermes-issue-orchestrator --install-deps
 ```
+
+## Tested
+
+End to end on Hermes v0.23.1 (10 Nov 2026) against a sandbox repository with example issues, using a free local model (Qwen2.5-3B-Instruct GGUF on llama.cpp, 64K context, `tools.tool_search.enabled: off`, toolset `hermes-issue-orchestrator`). One turn claimed an issue and posted a note; the `post_llm_call` hook then posted the turn's progress line with token counts; a resumed turn released the issue. Small local models work best with tool search off so the three tools are sent directly.
 
 ## Catalog draft
 
