@@ -26,10 +26,12 @@ State lives in the plugin SQLite database Hermes provides (`plugin_db`). Claim c
 
 Read this before installing.
 
-- The plugin calls `https://api.github.com` only: list and update issues, add and remove one label, post comments, and read the authenticated user (`GET /user`).
+- The plugin calls `https://api.github.com` only: list, read and close issues, add and remove one label, add or remove assignees (only its own login, plus the target on `reassign`), post comments, read an issue's comments when retrying a failed post, and read the authenticated user (`GET /user`).
 - The default credential is `HERMES_ISSUE_ORCHESTRATOR_GITHUB_TOKEN`, read with `agent.secret_scope.get_secret`. The plugin does not read `.env` files, `auth.json`, or another tool's token file.
 - Optional OAuth uses `credentialed_provider_request("github", ...)`. Hermes attaches and refreshes the token. Plugin code does not receive it. The declared scope is `public_repo` (public repositories only). Private repositories need a PAT.
-- `post_llm_call` posts to the claimed issue without a separate approval prompt for each comment. Posts are skipped when nothing is claimed, when two claims exist and the session did not claim one, when the line repeats, and when the last post was inside `progress_min_interval_seconds` (default 90). Explicit tool calls still go through Hermes's normal tool path.
+- `post_llm_call` posts to the claimed issue without a separate approval prompt for each comment. By default the post contains only a fixed sentence plus token counts; the model's reply is included only with `progress_include_reply: true`. Posts are skipped when nothing is claimed, when two claims exist and the session did not claim one, when the line repeats, and when the last post was inside `progress_min_interval_seconds` (default 90). Explicit tool calls still go through Hermes's normal tool path.
+- Each comment carries a hidden HTML marker (`<!-- hermes-issue-orchestrator:… -->`). If a comment request fails in transit, the next retry reads the issue's comments for that marker before posting, so a lost response does not cause a duplicate.
+- On HTTP 429, or a 403 secondary rate limit, a request is retried twice with a short backoff (2 s, then 4 s) and then fails with a clear "rate limit" error.
 - No shell commands, no background process, no telemetry, no self-update, and no change to Hermes core.
 - OAuth sign-in is `hermes auth add hermes-issue-orchestrator:github` in a terminal. Hermes does not start that browser flow from cron or the gateway. If the grant is missing, the tool returns an error instead of waiting.
 
@@ -49,7 +51,7 @@ The install directory name should stay `hermes-issue-orchestrator`. Settings bel
 
 ## Configure the PAT (default)
 
-Create a GitHub personal access token that can read and write issues on the target repository (classic `public_repo`, or a fine-grained token with Issues read/write on that repo).
+**Recommended:** a fine-grained personal access token limited to **only the queue repository**, with **Issues: read and write** (Metadata: read is added automatically) and nothing else. Every comment, label and assignment is made as that token's user, so use a token (or a bot account) you are happy to have speak on those issues. A classic `public_repo` token also works but reaches every public repository you can write to.
 
 Store it in Hermes. The shell `read` line keeps the paste out of the command you type:
 
@@ -82,6 +84,7 @@ Leave one open issue in that repository. The token's user needs permission to la
 | `queue_assignee` | empty | Login, `none` for unassigned, or empty for no filter |
 | `in_progress_label` | `in-progress` | Applied on claim, removed on handoff |
 | `progress_enabled` | `true` | Automatic progress comments after claimed turns |
+| `progress_include_reply` | `false` | Put the first line of the model's reply in the automatic progress line |
 | `progress_min_interval_seconds` | `90` | Minimum gap between those comments. `0` turns the time gate off |
 
 Config lives at `plugins.entries.hermes-issue-orchestrator.settings.<key>`.
@@ -107,23 +110,29 @@ Run `hermes auth add` from a terminal session, not from cron or the gateway. The
 
 ## Tools and `/issues`
 
-`issue_claim` takes `issue_number`, or picks the oldest open issue that matches `label` / `assignee` (or the settings above). It skips pull requests and issues that already have the in-progress label unless you pass a number. It creates the label if needed, assigns the authenticated user, and posts one claim comment.
+`issue_claim` takes `issue_number`, or picks the oldest open issue that matches `label` / `assignee` (or the settings above). Auto-pick skips pull requests, issues with the in-progress label, and issues assigned to anyone other than the token's user. A claim by number is refused when the issue has the in-progress label or someone else's assignment, unless this Hermes already holds the claim. It creates the label if needed, **adds** the authenticated user as an assignee (other assignees stay), and posts one claim comment.
+
+Claims are check-then-act: GitHub has no lock, so two Hermes instances that claim the same unassigned issue in the same second can both win. The label and assignee checks make that window small, not zero.
 
 `issue_comment_progress` posts `note` on the session's claimed issue, or on `issue_number`.
 
 `issue_handoff` requires `summary` and `action`:
 
 - `close` — comment, close the issue as completed, clear the in-progress label
-- `reassign` — comment, set `assignee` to that GitHub login, clear the label
-- `release` — comment, clear assignees and the label, leave the issue open
+- `reassign` — comment, remove the token's own login, add `assignee`, clear the label
+- `release` — comment, remove only the token's own login and the label, leave the issue open (other assignees stay)
+
+All three are refused unless this Hermes holds a local claim on the issue or the issue is assigned to the token's user.
 
 `/issues` lists local claims and the open queue. `/issues claimed` skips GitHub and shows local claim state. `/issues help` prints usage.
 
-Automatic progress runs only when progress is enabled and this session claimed an issue (or, with no session id, when exactly one issue is claimed). The line looks like:
+Automatic progress runs only when progress is enabled and this session claimed an issue (or, with no session id, when exactly one issue is claimed). By default the line does not include any chat text:
 
 ```text
-Hermes: Narrowed it to the parser. · tokens 10 in / 4 out
+Hermes: Turn finished on this issue. · tokens 10 in / 4 out
 ```
+
+Set `progress_include_reply: true` to use the first line of the model's reply instead (scrubbed for tokens, at most 180 characters). Leave it off on public repositories.
 
 Token counts are the provider usage reported on `post_api_request` for that session. They are posted at the end of the turn when the session has a claim. A repeated sentence is not posted again unless new tokens have arrived and the interval has passed.
 

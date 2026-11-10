@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any, Protocol
 
-from .constants import API_ROOT, API_VERSION, REQUEST_TIMEOUT_SECONDS, TOKEN_ENV, USER_AGENT
+from .constants import (
+    API_ROOT,
+    API_VERSION,
+    RATE_LIMIT_MAX_SLEEP_SECONDS,
+    RATE_LIMIT_RETRIES,
+    REQUEST_TIMEOUT_SECONDS,
+    TOKEN_ENV,
+    USER_AGENT,
+)
 from .errors import OrchestratorError, assert_never
 from .host import oauth_exchange, pat_hint, read_secret
 from .settings import Settings
@@ -20,20 +29,47 @@ class Transport(Protocol):
 
 
 class GitHubClient:
-    def __init__(self, transport: Transport) -> None:
+    def __init__(self, transport: Transport, sleep: Any = None) -> None:
         self._transport = transport
+        self._sleep = sleep or time.sleep
 
     def request(self, method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, Any]:
         if method not in {"GET", "POST", "PATCH", "DELETE"}:
             raise OrchestratorError("refusing an unsupported GitHub method")
         if not path.startswith("/") or path.startswith("//"):
             raise OrchestratorError("refusing a malformed GitHub path")
-        if method in {"GET", "DELETE"} and body is not None:
+        if body is not None and (method == "GET" or (method == "DELETE" and not _assignees_path(path))):
             raise OrchestratorError("refusing a body on this GitHub request")
         url = API_ROOT + path
         guard_url(url)
-        status, raw = self._transport.send(method, url, body)
-        return status, decode_body(raw)
+        attempt = 0
+        while True:
+            status, raw = self._transport.send(method, url, body)
+            data = decode_body(raw)
+            if not is_rate_limited(status, data):
+                return status, data
+            if attempt >= RATE_LIMIT_RETRIES:
+                raise OrchestratorError(
+                    f"GitHub rate limit hit (HTTP {status}) after {attempt + 1} tries; wait a minute and retry",
+                    hint="GitHub limits how fast one token can write; lower progress frequency or retry later",
+                    status=status,
+                )
+            # A rate-limited request was not applied, so retrying it cannot duplicate work.
+            self._sleep(min(RATE_LIMIT_MAX_SLEEP_SECONDS, 2.0 ** attempt * 2.0))
+            attempt += 1
+
+
+def is_rate_limited(status: int, data: Any) -> bool:
+    if status == 429:
+        return True
+    if status != 403 or not isinstance(data, dict):
+        return False
+    message = str(data.get("message") or "").lower()
+    return "rate limit" in message or "abuse" in message
+
+
+def _assignees_path(path: str) -> bool:
+    return path.split("?", 1)[0].endswith("/assignees")
 
 
 class PatTransport:

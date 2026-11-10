@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 PLUGIN_NAME = "hermes-issue-orchestrator"
-# OPEN DECISION: placeholder public sandbox. Point `repo` at the repository
-# you actually want Hermes to work. See the README.
+# OPEN DECISION: the author's private demo sandbox. Other users must point
+# `repo` at a repository their token can reach. See the README.
 DEFAULT_REPO = "krantikaridev/hermes-orchestrator-sandbox"
 TOKEN_ENV = "HERMES_ISSUE_ORCHESTRATOR_GITHUB_TOKEN"
 CLIENT_ID_ENV = "HERMES_ISSUE_ORCHESTRATOR_GITHUB_CLIENT_ID"
@@ -20,3 +20,6 @@ LABEL_COLOR = "fbca04"
 REQUEST_TIMEOUT_SECONDS = 20.0
 PROGRESS_CHAR_LIMIT = 180
 COMMENT_CHAR_LIMIT = 4000
+RATE_LIMIT_RETRIES = 2
+RATE_LIMIT_MAX_SLEEP_SECONDS = 8.0
+MARKER_PREFIX = "<!-- hermes-issue-orchestrator:"

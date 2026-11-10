@@ -9,7 +9,7 @@ from tests.fake_github import FakeGitHub
 
 
 def _settings(**overrides):
-    values = {"repo": "acme/demo", "auth_method": "pat", "progress_min_interval_seconds": 90}
+    values = {"repo": "acme/demo", "auth_method": "pat", "progress_min_interval_seconds": 90, "progress_include_reply": True}
     values.update(overrides)
     return parse_settings(values)
 
@@ -118,7 +118,7 @@ def test_registered_hooks_accept_the_host_payload():
     class Ctx:
         def __init__(self):
             self.hooks = {}
-            self.config = {"repo": "acme/demo", "progress_min_interval_seconds": 0}
+            self.config = {"repo": "acme/demo", "progress_min_interval_seconds": 0, "progress_include_reply": True}
 
         def register_tool(self, *args, **kwargs):
             return None
@@ -153,3 +153,17 @@ def test_registered_hooks_accept_the_host_payload():
         platform="cli",
     )
     assert _progress_comments(fake) == ["Hermes: hook line with detail · tokens 5 in / 1 out"]
+
+
+def test_progress_line_omits_the_model_reply_by_default():
+    from tests.fake_github import FakeGitHub
+
+    fake = FakeGitHub()
+    fake.add_issue(40, "Quiet")
+    service.set_client_factory(lambda settings: fake)
+    settings = parse_settings({"repo": "acme/demo", "progress_min_interval_seconds": 0})
+    service.claim_issue(settings, {"issue_number": 40}, session_id="q")
+    service.note_tokens(settings, session_id="q", usage={"prompt_tokens": 7, "completion_tokens": 2})
+    service.note_turn(settings, session_id="q", assistant_response="secret plan details from the chat")
+    lines = [c["body"] for c in fake.comments if "tokens" in c["body"]]
+    assert lines == ["Hermes: Turn finished on this issue. · tokens 7 in / 2 out"]

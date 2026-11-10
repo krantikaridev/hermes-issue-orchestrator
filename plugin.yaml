@@ -60,6 +60,10 @@ config_schema:
     type: bool
     default: true
     description: After a claimed turn, post one rate-limited progress line with token totals.
+  progress_include_reply:
+    type: bool
+    default: false
+    description: Include the first line of the model's reply (scrubbed, max 180 chars) in the automatic progress line. Off by default so chat text is not posted to the issue.
   progress_min_interval_seconds:
     type: int
     default: 90

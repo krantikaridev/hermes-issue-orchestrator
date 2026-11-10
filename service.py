@@ -11,7 +11,7 @@ from collections.abc import Callable
 from typing import Any, Literal
 from urllib.parse import quote
 
-from .constants import COMMENT_CHAR_LIMIT, LABEL_COLOR
+from .constants import COMMENT_CHAR_LIMIT, LABEL_COLOR, MARKER_PREFIX
 from .errors import OrchestratorError, assert_never
 from .github_client import GitHubClient, build_transport
 from .settings import Settings, auth_hint, normalize_label, normalize_login
@@ -65,13 +65,14 @@ def run_tool(fn: Callable[[], dict[str, Any]]) -> str:
 def claim_issue(settings: Settings, args: object, session_id: str = "") -> dict[str, Any]:
     payload = coerce_args(args)
     client = client_for(settings)
-    issue = _select_issue(settings, client, payload)
+    me = _my_login(settings, client)
+    issue = _select_issue(settings, client, payload, me)
     number = int(issue["number"])
     title = _title(issue)
     marked = store.mark_claimed(settings.repo, number, session_id, title)
     try:
         _ensure_label(settings, client, settings.repo, number)
-        login, warning = _try_assign(settings, client, settings.repo, number)
+        login, warning = _try_assign(settings, client, settings.repo, number, me)
         posted = post_unique(
             settings,
             client,
@@ -135,11 +136,18 @@ def handoff_issue(settings: Settings, args: object, session_id: str = "") -> dic
             return _handoff_result(repo, number, action, deduped=True, state="closed")
         raise OrchestratorError(f"issue #{number} is not open")
     existing = store.get_claim(repo, number)
+    me = _my_login(settings, client)
+    held = existing is not None and existing.get("state") == "claimed"
+    if not held and me not in _assignee_logins(issue):
+        raise OrchestratorError(
+            f"refusing to {action} #{number}: this Hermes has no claim on it and it is not assigned to {me}",
+            hint="claim the issue first with issue_claim",
+        )
     generation = int(existing["generation"]) if existing else 0
     material = f"{generation}:{action}:{summary}:{assignee}"
     body = _handoff_body(action, summary, assignee)
     post_unique(settings, client, repo, number, "handoff", material, body)
-    _request(settings, client, "PATCH", f"{_repo_path(repo)}/issues/{number}", _handoff_patch(action, assignee))
+    _apply_handoff(settings, client, repo, number, action, me, assignee)
     _remove_label(settings, client, repo, number)
     state = _handoff_state(action)
     store.set_state(repo, number, state, _title(issue))
@@ -273,21 +281,41 @@ def post_unique(
     body: str,
 ) -> bool:
     key = _event_key(kind, repo, number, material)
+    marker = f"{MARKER_PREFIX}{key.rsplit(':', 1)[-1][:16]} -->"
     if not store.try_insert_event(key, kind):
-        return False
+        if not store.event_pending(key):
+            return False
+        # An earlier POST failed in transit and may have landed. Look before posting again.
+        if _marker_on_issue(settings, client, repo, number, marker):
+            store.confirm_event(key)
+            return False
     try:
         status, data = client.request(
             "POST",
             f"{_repo_path(repo)}/issues/{number}/comments",
-            {"body": body[:60_000]},
+            {"body": f"{body[:60_000]}\n\n{marker}"},
         )
-        if status not in (200, 201):
+    except OrchestratorError as exc:
+        if exc.status:
             store.delete_event(key)
-            _fail(settings, status, data)
-    except Exception:
-        store.delete_event(key)
+        else:
+            store.mark_event_pending(key)
         raise
+    except Exception:
+        store.mark_event_pending(key)
+        raise
+    if status not in (200, 201):
+        store.delete_event(key)
+        _fail(settings, status, data)
+    store.confirm_event(key)
     return True
+
+
+def _marker_on_issue(settings: Settings, client: Any, repo: str, number: int, marker: str) -> bool:
+    data = _request(settings, client, "GET", f"{_repo_path(repo)}/issues/{number}/comments?per_page=100")
+    if not isinstance(data, list):
+        return False
+    return any(isinstance(item, dict) and marker in str(item.get("body") or "") for item in data)
 
 
 def _note_turn(settings: Settings, session_id: str, assistant_response: str) -> None:
@@ -303,7 +331,7 @@ def _note_turn(settings: Settings, session_id: str, assistant_response: str) -> 
     number = int(row["issue_number"])
     if moved != (0, 0):
         store.add_tokens(repo, number, moved[0], moved[1], "")
-    sentence = one_line(assistant_response)
+    sentence = one_line(assistant_response) if settings.progress_include_reply else "Turn finished on this issue."
     sentence_hash = hashlib.sha256(sentence.encode("utf-8")).hexdigest()
     reserved = store.reserve_progress(repo, number, sentence_hash, now(), settings.progress_min_interval_seconds)
     if reserved is None:
@@ -345,14 +373,16 @@ def _hook_claim(settings: Settings, session_id: str) -> dict[str, Any] | None:
     return None
 
 
-def _select_issue(settings: Settings, client: Any, args: dict[str, Any]) -> dict[str, Any]:
+def _select_issue(settings: Settings, client: Any, args: dict[str, Any], me: str) -> dict[str, Any]:
     number = parse_issue_number(args.get("issue_number"))
     if number is not None:
-        return _load_open_issue(settings, client, settings.repo, number)
+        issue = _load_open_issue(settings, client, settings.repo, number)
+        _refuse_if_held_elsewhere(settings, issue, number, me)
+        return issue
     label = _filter_label(settings, args)
     assignee = _filter_assignee(settings, args)
     for issue in _list_issues(settings, client, settings.repo, label, assignee):
-        if _skipped_auto(settings, issue):
+        if _skipped_auto(settings, issue, me):
             continue
         return issue
     raise OrchestratorError("no open issue matched the queue filters")
@@ -405,10 +435,38 @@ def _load_issue(settings: Settings, client: Any, repo: str, number: int) -> dict
     return data
 
 
-def _skipped_auto(settings: Settings, issue: dict[str, Any]) -> bool:
+def _skipped_auto(settings: Settings, issue: dict[str, Any], me: str) -> bool:
     if "pull_request" in issue or issue.get("state") != "open":
         return True
-    return settings.in_progress_label in _label_names(issue)
+    if settings.in_progress_label in _label_names(issue):
+        return True
+    return any(login != me for login in _assignee_logins(issue))
+
+
+def _refuse_if_held_elsewhere(settings: Settings, issue: dict[str, Any], number: int, me: str) -> None:
+    existing = store.get_claim(settings.repo, number)
+    if existing is not None and existing.get("state") == "claimed":
+        return
+    others = [login for login in _assignee_logins(issue) if login != me]
+    if others:
+        raise OrchestratorError(
+            f"refusing to claim #{number}: it is assigned to {', '.join(others)}",
+            hint="pick another issue, or ask the assignee to hand it off",
+        )
+    if settings.in_progress_label in _label_names(issue):
+        raise OrchestratorError(
+            f"refusing to claim #{number}: it already has the {settings.in_progress_label} label "
+            "and this Hermes holds no claim on it",
+            hint="another agent may be working it; release it there or remove the label by hand",
+        )
+
+
+def _my_login(settings: Settings, client: Any) -> str:
+    user = _request(settings, client, "GET", "/user")
+    login = str(user.get("login") or "") if isinstance(user, dict) else ""
+    if not login:
+        raise OrchestratorError("GitHub did not return a login for this credential", hint=auth_hint(settings))
+    return login
 
 
 def _ensure_label(settings: Settings, client: Any, repo: str, number: int) -> None:
@@ -436,12 +494,9 @@ def _remove_label(settings: Settings, client: Any, repo: str, number: int) -> No
         _fail(settings, status, data)
 
 
-def _try_assign(settings: Settings, client: Any, repo: str, number: int) -> tuple[str, str]:
-    user = _request(settings, client, "GET", "/user")
-    login = str(user.get("login") or "") if isinstance(user, dict) else ""
-    if not login:
-        return "", "GitHub did not return a login for this credential"
-    status, data = client.request("PATCH", f"{_repo_path(repo)}/issues/{number}", {"assignees": [login]})
+def _try_assign(settings: Settings, client: Any, repo: str, number: int, login: str) -> tuple[str, str]:
+    # POST adds an assignee; PATCH {"assignees": [...]} would replace everyone else.
+    status, data = client.request("POST", f"{_repo_path(repo)}/issues/{number}/assignees", {"assignees": [login]})
     if status not in (200, 201):
         message = data.get("message") if isinstance(data, dict) else "could not assign"
         return "", f"could not assign {login}: {str(message)[:200]}"
@@ -475,16 +530,26 @@ def _filter_assignee(settings: Settings, args: dict[str, Any]) -> str:
     return settings.queue_assignee
 
 
-def _handoff_patch(action: Action, assignee: str) -> dict[str, Any]:
+def _apply_handoff(
+    settings: Settings, client: Any, repo: str, number: int, action: Action, me: str, assignee: str
+) -> None:
+    path = f"{_repo_path(repo)}/issues/{number}"
     match action:
         case "close":
-            return {"state": "closed", "state_reason": "completed"}
-        case "reassign":
-            return {"assignees": [assignee]}
+            _request(settings, client, "PATCH", path, {"state": "closed", "state_reason": "completed"})
         case "release":
-            return {"assignees": []}
+            _unassign(settings, client, repo, number, me)
+        case "reassign":
+            if assignee != me:
+                _unassign(settings, client, repo, number, me)
+            _request(settings, client, "POST", f"{path}/assignees", {"assignees": [assignee]})
         case unreachable:
             assert_never(unreachable)
+
+
+def _unassign(settings: Settings, client: Any, repo: str, number: int, login: str) -> None:
+    """Remove only this token's login; other assignees stay."""
+    _request(settings, client, "DELETE", f"{_repo_path(repo)}/issues/{number}/assignees", {"assignees": [login]})
 
 
 def _handoff_body(action: Action, summary: str, assignee: str) -> str:

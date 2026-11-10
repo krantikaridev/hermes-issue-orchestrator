@@ -17,6 +17,8 @@ class FakeGitHub:
         self.fail_assign = False
         self.fail_labels = 0
         self.fail_comments = 0
+        self.drop_comment_response = 0
+        self.rate_limited = 0
 
     def add_issue(
         self,
@@ -43,6 +45,9 @@ class FakeGitHub:
 
     def request(self, method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, Any]:
         self.calls.append((method, path, body))
+        if self.rate_limited:
+            self.rate_limited -= 1
+            return 429, {"message": "API rate limit exceeded"}
         parsed = urllib.parse.urlsplit(path)
         parts = [urllib.parse.unquote(part) for part in parsed.path.strip("/").split("/") if part]
         query = urllib.parse.parse_qs(parsed.query)
@@ -90,14 +95,40 @@ class FakeGitHub:
             if len(tail) == 2 and tail[0] == "labels" and method == "DELETE":
                 issue["labels"] = [label for label in issue["labels"] if label["name"] != tail[1]]
                 return 204, None
+            if tail == ["assignees"] and method == "POST":
+                if self.fail_assign:
+                    return 422, {"message": "cannot assign"}
+                current = [person["login"] for person in issue["assignees"]]
+                for login in (body or {}).get("assignees") or []:
+                    if login not in current:
+                        issue["assignees"].append({"login": login})
+                return 201, issue
+            if tail == ["assignees"] and method == "DELETE":
+                drop = set((body or {}).get("assignees") or [])
+                issue["assignees"] = [person for person in issue["assignees"] if person["login"] not in drop]
+                return 200, issue
+            if tail == ["comments"] and method == "GET":
+                return 200, [{"body": c["raw"]} for c in self.comments if c["number"] == number]
             if tail == ["comments"] and method == "POST":
+                if self.drop_comment_response:
+                    # GitHub stores the comment but the response is lost in transit.
+                    self.drop_comment_response -= 1
+                    self._store_comment(number, str((body or {}).get("body") or ""))
+                    from hio.errors import OrchestratorError
+
+                    raise OrchestratorError("GitHub request failed")
                 if self.fail_comments:
                     self.fail_comments -= 1
                     return 500, {"message": "comment failed"}
-                text = str((body or {}).get("body") or "")
-                self.comments.append({"number": number, "body": text})
+                text = self._store_comment(number, str((body or {}).get("body") or ""))
                 return 201, {"id": len(self.comments), "body": text}
         return 404, {"message": "not found"}
+
+    def _store_comment(self, number: int, raw: str) -> str:
+        """Keep the raw body (with the hidden marker) and the visible text tests compare."""
+        visible = raw.split("\n\n<!-- hermes-issue-orchestrator:", 1)[0]
+        self.comments.append({"number": number, "body": visible, "raw": raw})
+        return raw
 
     def _patch(self, issue: dict[str, Any], body: dict[str, Any]) -> tuple[int, Any]:
         if self.fail_assign and "assignees" in body:

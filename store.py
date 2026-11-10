@@ -147,6 +147,32 @@ def delete_event(key: str) -> None:
         conn.execute("DELETE FROM events WHERE dedupe_key=?", (key,))
 
 
+_PENDING = "pending:"
+
+
+def mark_event_pending(key: str) -> None:
+    """The POST may or may not have reached GitHub. Keep the key so a retry checks first."""
+    with connection() as conn:
+        conn.execute(
+            "UPDATE events SET kind=? || kind WHERE dedupe_key=? AND kind NOT LIKE ?",
+            (_PENDING, key, _PENDING + "%"),
+        )
+
+
+def event_pending(key: str) -> bool:
+    with connection() as conn:
+        row = _one(conn, "SELECT kind FROM events WHERE dedupe_key=?", (key,))
+        return row is not None and str(row["kind"]).startswith(_PENDING)
+
+
+def confirm_event(key: str) -> None:
+    with connection() as conn:
+        conn.execute(
+            "UPDATE events SET kind=substr(kind, ?) WHERE dedupe_key=? AND kind LIKE ?",
+            (len(_PENDING) + 1, key, _PENDING + "%"),
+        )
+
+
 def add_tokens(repo: str, number: int, prompt: int, completion: int, api_request_id: str = "") -> bool:
     if prompt == 0 and completion == 0:
         return False

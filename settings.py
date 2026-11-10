@@ -25,6 +25,7 @@ class Settings:
     in_progress_label: str
     progress_enabled: bool
     progress_min_interval_seconds: int
+    progress_include_reply: bool = False
 
 
 def auth_hint(settings: Settings) -> str:
@@ -76,6 +77,7 @@ def parse_settings(values: Mapping[str, Any] | None = None) -> Settings:
         in_progress_label=normalize_label(raw.get("in_progress_label", IN_PROGRESS_LABEL), allow_empty=False),
         progress_enabled=_bool(raw.get("progress_enabled", True), default=True),
         progress_min_interval_seconds=_interval(raw.get("progress_min_interval_seconds", 90)),
+        progress_include_reply=_bool(raw.get("progress_include_reply", False), default=False),
     )
 
 
@@ -88,6 +90,7 @@ def load_settings(ctx: Any) -> Settings:
         "in_progress_label",
         "progress_enabled",
         "progress_min_interval_seconds",
+        "progress_include_reply",
     )
     values = {key: ctx.get_config(key, None) for key in keys}
     cleaned = {key: value for key, value in values.items() if value is not None}

@@ -119,7 +119,7 @@ def test_handoff_close_reassign_and_release():
     assert closed["state"] == "closed"
     assert fake.issues[10]["state"] == "closed"
     assert moved["state"] == "reassigned"
-    assert fake.issues[11]["assignees"] == [{"login": "ada"}]
+    assert fake.issues[11]["assignees"] == [{"login": "ada"}]  # own login removed, ada added
     assert released["state"] == "released"
     assert fake.issues[12]["assignees"] == []
     assert all(label["name"] != "in-progress" for label in fake.issues[12]["labels"])
@@ -187,3 +187,110 @@ def test_tool_reports_a_missing_pat_without_calling_github():
     assert raw["ok"] is False
     assert "hermes config set" in raw["hint"]
     assert opener_calls["n"] == 0
+
+
+def test_auto_claim_skips_an_issue_assigned_to_a_person():
+    fake = _use(FakeGitHub())
+    fake.add_issue(20, "Alice has this", assignees=["alice"])
+    fake.add_issue(21, "Free")
+    result = service.claim_issue(_settings(), {}, session_id="s")
+    assert result["issue_number"] == 21
+    assert fake.issues[20]["assignees"] == [{"login": "alice"}]
+    assert not any(c["number"] == 20 for c in fake.comments)
+
+
+def test_claim_assigns_by_adding_not_replacing():
+    fake = _use(FakeGitHub())
+    fake.add_issue(22, "Mine, with a reviewer", assignees=["octocat"])
+    service.claim_issue(_settings(), {"issue_number": 22}, session_id="s")
+    assert not any(method == "PATCH" for method, _, _ in fake.calls)
+    assert ("POST", "/repos/acme/demo/issues/22/assignees", {"assignees": ["octocat"]}) in fake.calls
+
+
+def test_claim_by_number_refuses_a_labelled_or_assigned_issue():
+    fake = _use(FakeGitHub())
+    fake.add_issue(23, "Other agent's", labels=["in-progress"], assignees=["otherbot"])
+    fake.add_issue(24, "Labelled, no claim here", labels=["in-progress"])
+    fake.add_issue(25, "A person's", assignees=["alice"])
+    with pytest.raises(OrchestratorError, match="assigned to otherbot"):
+        service.claim_issue(_settings(), {"issue_number": 23}, session_id="s")
+    with pytest.raises(OrchestratorError, match="in-progress label"):
+        service.claim_issue(_settings(), {"issue_number": 24}, session_id="s")
+    with pytest.raises(OrchestratorError, match="assigned to alice"):
+        service.claim_issue(_settings(), {"issue_number": 25}, session_id="s")
+    assert fake.issues[23]["assignees"] == [{"login": "otherbot"}]
+    assert fake.comments == []
+    assert store.get_claim("acme/demo", 23) is None
+
+
+def test_reclaim_by_number_is_allowed_when_this_store_holds_the_claim():
+    fake = _use(FakeGitHub())
+    fake.add_issue(26, "Mine")
+    service.claim_issue(_settings(), {"issue_number": 26}, session_id="s")
+    again = service.claim_issue(_settings(), {"issue_number": 26}, session_id="s")
+    assert again["ok"] is True and again["deduped"] is True
+
+
+def test_release_keeps_other_assignees():
+    fake = _use(FakeGitHub())
+    fake.add_issue(27, "Shared")
+    service.claim_issue(_settings(), {"issue_number": 27}, session_id="s")
+    fake.issues[27]["assignees"].append({"login": "alice"})
+    service.handoff_issue(_settings(), {"action": "release", "summary": "back"}, session_id="s")
+    assert fake.issues[27]["assignees"] == [{"login": "alice"}]
+    assert ("DELETE", "/repos/acme/demo/issues/27/assignees", {"assignees": ["octocat"]}) in fake.calls
+
+
+def test_handoff_on_an_unclaimed_issue_is_refused():
+    fake = _use(FakeGitHub())
+    fake.add_issue(28, "Alice's", assignees=["alice"])
+    for action in ("close", "release", "reassign"):
+        with pytest.raises(OrchestratorError, match="no claim"):
+            service.handoff_issue(
+                _settings(), {"issue_number": 28, "action": action, "summary": "x", "assignee": "bob"}
+            )
+    assert fake.issues[28]["state"] == "open"
+    assert fake.issues[28]["assignees"] == [{"login": "alice"}]
+    assert fake.comments == []
+
+
+def test_handoff_is_allowed_on_an_issue_assigned_to_me_without_a_local_claim():
+    fake = _use(FakeGitHub())
+    fake.add_issue(29, "Assigned to me elsewhere", assignees=["octocat"])
+    result = service.handoff_issue(_settings(), {"issue_number": 29, "action": "close", "summary": "done"})
+    assert result["state"] == "closed"
+
+
+def test_comment_retry_after_a_lost_response_does_not_duplicate():
+    fake = _use(FakeGitHub())
+    fake.add_issue(30, "Flaky network")
+    service.claim_issue(_settings(), {"issue_number": 30}, session_id="s")
+    fake.drop_comment_response = 1
+    with pytest.raises(OrchestratorError):
+        service.comment_progress(_settings(), {"note": "halfway"}, session_id="s")
+    retry = service.comment_progress(_settings(), {"note": "halfway"}, session_id="s")
+    assert retry["deduped"] is True
+    notes = [c for c in fake.comments if "halfway" in c["body"]]
+    assert len(notes) == 1
+
+
+def test_rate_limit_backs_off_then_reports_clearly():
+    from hio.github_client import GitHubClient
+
+    fake = FakeGitHub()
+    fake.add_issue(31, "Busy")
+    sleeps = []
+
+    class Transport:
+        def send(self, method, url, body):
+            status, data = fake.request(method, url.replace("https://api.github.com", ""), body)
+            return status, json.dumps(data).encode() if data is not None else b""
+
+    service.set_client_factory(lambda settings: GitHubClient(Transport(), sleep=sleeps.append))
+    fake.rate_limited = 1
+    assert service.claim_issue(_settings(), {"issue_number": 31})["ok"] is True
+    assert sleeps == [2.0]
+    fake.rate_limited = 10
+    raw = json.loads(service.run_tool(lambda: service.comment_progress(_settings(), {"note": "n", "issue_number": 31})))
+    assert raw["ok"] is False
+    assert "rate limit" in raw["error"]
