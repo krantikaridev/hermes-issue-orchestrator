@@ -1,0 +1,95 @@
+name: hermes-issue-orchestrator
+version: "0.1.0"
+description: Work a GitHub repository's open issues as Hermes's task queue.
+author: krantikaridev
+license: MIT
+homepage: https://github.com/krantikaridev/hermes-issue-orchestrator
+manifest_version: 2
+api_version: 1
+requires_hermes: ">=0.22.0"
+tags:
+  - github
+  - issues
+  - automation
+provides_tools:
+  - issue_claim
+  - issue_comment_progress
+  - issue_handoff
+provides_hooks:
+  - post_llm_call
+  - post_api_request
+# PAT is the default and is not required to load, so an optional OAuth setup
+# can enable the plugin without a token. Each path checks its own credential
+# at call time.
+optional_env:
+  - name: HERMES_ISSUE_ORCHESTRATOR_GITHUB_TOKEN
+    description: GitHub personal access token used when auth_method is pat (the default).
+    url: https://github.com/settings/tokens
+    secret: true
+  - name: HERMES_ISSUE_ORCHESTRATOR_GITHUB_CLIENT_ID
+    description: Optional GitHub OAuth app client id. Only used when auth_method is oauth.
+    url: https://github.com/settings/developers
+    secret: false
+  - name: HERMES_ISSUE_ORCHESTRATOR_GITHUB_CLIENT_SECRET
+    description: Optional GitHub OAuth app client secret. Only used when auth_method is oauth.
+    url: https://github.com/settings/developers
+    secret: true
+config_schema:
+  repo:
+    type: str
+    required: true
+    description: Required. GitHub owner/name whose open issues are the queue, for example owner/example-repo. There is no default.
+  auth_method:
+    type: str
+    default: pat
+    choices: [pat, oauth]
+    description: pat reads the Hermes secret. oauth is optional and asks Hermes to hold a GitHub OAuth grant.
+  queue_label:
+    type: str
+    default: ""
+    description: Only auto-claim open issues with this label. Empty means any open issue.
+  queue_assignee:
+    type: str
+    default: ""
+    description: GitHub login, none, or empty. Empty does not filter by assignee.
+  in_progress_label:
+    type: str
+    default: in-progress
+    description: Label applied when an issue is claimed and removed on handoff.
+  progress_enabled:
+    type: bool
+    default: true
+    description: After a claimed turn, post one rate-limited progress line with token totals.
+  progress_include_reply:
+    type: bool
+    default: false
+    description: Include the first line of the model's reply (scrubbed, max 180 chars) in the automatic progress line. Off by default so chat text is not posted to the issue.
+  progress_min_interval_seconds:
+    type: int
+    default: 90
+    description: Minimum seconds between automatic progress comments on the same issue. 0 disables the time gate.
+  github_token:
+    type: secret
+    env: HERMES_ISSUE_ORCHESTRATOR_GITHUB_TOKEN
+    required: false
+    description: Personal access token for auth_method pat. This is the default credential.
+  github_oauth_client_id:
+    type: secret
+    env: HERMES_ISSUE_ORCHESTRATOR_GITHUB_CLIENT_ID
+    required: false
+    description: OAuth app client id. Leave unset when using a PAT.
+  github_oauth_client_secret:
+    type: secret
+    env: HERMES_ISSUE_ORCHESTRATOR_GITHUB_CLIENT_SECRET
+    required: false
+    description: OAuth app client secret. Leave unset when using a PAT.
+oauth:
+  - id: github
+    authorize_url: https://github.com/login/oauth/authorize
+    token_url: https://github.com/login/oauth/access_token
+    scopes:
+      - public_repo
+    client_id_env: HERMES_ISSUE_ORCHESTRATOR_GITHUB_CLIENT_ID
+    client_secret_env: HERMES_ISSUE_ORCHESTRATOR_GITHUB_CLIENT_SECRET
+    hosts:
+      - api.github.com
