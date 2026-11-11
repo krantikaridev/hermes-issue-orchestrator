@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping
 
-from .constants import DEFAULT_REPO, IN_PROGRESS_LABEL, OAUTH_HINT, PAT_HINT
+from .constants import IN_PROGRESS_LABEL, OAUTH_HINT, PAT_HINT, REPO_REQUIRED
 from .errors import OrchestratorError
 
 AuthMethod = Literal["pat", "oauth"]
@@ -37,7 +37,7 @@ def auth_hint(settings: Settings) -> str:
 def normalize_repo(value: object) -> str:
     text = str(value or "").strip()
     if not text:
-        text = DEFAULT_REPO
+        raise OrchestratorError(REPO_REQUIRED)
     text = re.sub(r"\.git$", "", text, flags=re.IGNORECASE)
     text = re.sub(r"^https?://github\.com/", "", text, flags=re.IGNORECASE)
     text = text.strip("/")

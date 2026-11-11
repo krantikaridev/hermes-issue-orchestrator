@@ -9,6 +9,7 @@ import pytest
 import hio
 import hio.service as service
 import hio.store as store
+from hio.constants import REPO_REQUIRED
 from hio.errors import OrchestratorError
 from hio.settings import parse_settings
 from tests.fake_github import FakeGitHub
@@ -294,3 +295,48 @@ def test_rate_limit_backs_off_then_reports_clearly():
     raw = json.loads(service.run_tool(lambda: service.comment_progress(_settings(), {"note": "n", "issue_number": 31})))
     assert raw["ok"] is False
     assert "rate limit" in raw["error"]
+
+
+def test_unset_repo_tools_hooks_and_issues_do_not_call_github():
+    class Forbidden:
+        def __getattr__(self, name):
+            raise AssertionError(f"GitHub should not be called: {name}")
+
+    service.set_client_factory(lambda settings: Forbidden())
+
+    class Ctx:
+        def __init__(self):
+            self.tools = {}
+            self.hooks = {}
+            self.commands = {}
+            self.skills = []
+            self.config = {}
+
+        def register_tool(self, name, toolset, schema, handler, **kwargs):
+            self.tools[name] = handler
+
+        def register_hook(self, name, callback, **kwargs):
+            self.hooks[name] = callback
+
+        def register_command(self, name, handler, **kwargs):
+            self.commands[name] = handler
+
+        def register_skill(self, name, path, **kwargs):
+            self.skills.append(name)
+
+        def get_config(self, key, default=None):
+            return self.config.get(key, default)
+
+    ctx = Ctx()
+    hio.register(ctx)
+    payloads = {
+        "issue_claim": {},
+        "issue_comment_progress": {"note": "halfway"},
+        "issue_handoff": {"summary": "done", "action": "release"},
+    }
+    for name, args in payloads.items():
+        raw = json.loads(ctx.tools[name](args, session_id="s"))
+        assert raw == {"ok": False, "error": REPO_REQUIRED}
+    assert ctx.commands["issues"]("", session_id="s") == REPO_REQUIRED
+    assert ctx.hooks["post_api_request"](session_id="s", usage={"prompt_tokens": 1, "completion_tokens": 1}) == REPO_REQUIRED
+    assert ctx.hooks["post_llm_call"](session_id="s", assistant_response="hello") == REPO_REQUIRED

@@ -129,6 +129,6 @@ def test_oauth_refuses_other_hosts_before_the_exchange():
 def test_default_transport_is_pat_and_oauth_is_opt_in():
     from hio.github_client import build_transport
 
-    assert isinstance(build_transport(parse_settings({})), PatTransport)
+    assert isinstance(build_transport(parse_settings({"repo": "acme/demo"})), PatTransport)
     selected = build_transport(parse_settings({"auth_method": "oauth", "repo": "acme/demo"}))
     assert isinstance(selected, OAuthTransport)

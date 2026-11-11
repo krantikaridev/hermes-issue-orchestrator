@@ -37,8 +37,8 @@ optional_env:
 config_schema:
   repo:
     type: str
-    default: krantikaridev/hermes-orchestrator-sandbox
-    description: GitHub owner/repo whose open issues are the queue. The default is an OPEN DECISION placeholder.
+    required: true
+    description: Required. GitHub owner/name whose open issues are the queue, for example owner/example-repo. There is no default.
   auth_method:
     type: str
     default: pat

@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 PLUGIN_NAME = "hermes-issue-orchestrator"
-# OPEN DECISION: the author's private demo sandbox. Other users must point
-# `repo` at a repository their token can reach. See the README.
-DEFAULT_REPO = "krantikaridev/hermes-orchestrator-sandbox"
+REPO_SETTING = f"plugins.entries.{PLUGIN_NAME}.settings.repo"
+REPO_REQUIRED = f"set {REPO_SETTING}"
 TOKEN_ENV = "HERMES_ISSUE_ORCHESTRATOR_GITHUB_TOKEN"
 CLIENT_ID_ENV = "HERMES_ISSUE_ORCHESTRATOR_GITHUB_CLIENT_ID"
 CLIENT_SECRET_ENV = "HERMES_ISSUE_ORCHESTRATOR_GITHUB_CLIENT_SECRET"

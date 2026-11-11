@@ -6,7 +6,7 @@ Hermes can claim an open issue, mark it in progress, post progress (including a 
 
 **Credential decision:** the supported day-to-day path is a GitHub personal access token stored in Hermes secrets. That is what the demo below uses. GitHub OAuth is optional and off unless you set `auth_method` to `oauth`. Hermes holds that grant; this plugin never reads the OAuth token.
 
-**OPEN DECISION:** the default repository is the placeholder `krantikaridev/hermes-orchestrator-sandbox`. It is not a promise that the sandbox exists or that you should use it. Set `repo` to the public repository you want Hermes to work before the demo.
+**Required:** set `repo` to the GitHub `owner/name` you want Hermes to work, for example `owner/example-repo`. There is no default. Until it is set, tools, hooks and `/issues` return `set plugins.entries.hermes-issue-orchestrator.settings.repo` and do not call GitHub.
 
 ## What it registers
 
@@ -63,10 +63,10 @@ unset PAT
 
 In Hermes Desktop, the same value is the plugin's **GitHub token** secret. Hermes stores it under `HERMES_ISSUE_ORCHESTRATOR_GITHUB_TOKEN`.
 
-Point the queue at a repository you control. The default below is the OPEN DECISION placeholder:
+Point the queue at a repository you control. This setting is required; there is no default:
 
 ```bash
-hermes config set plugins.entries.hermes-issue-orchestrator.settings.repo krantikaridev/hermes-orchestrator-sandbox
+hermes config set plugins.entries.hermes-issue-orchestrator.settings.repo owner/example-repo
 hermes config set plugins.entries.hermes-issue-orchestrator.settings.auth_method pat
 ```
 
@@ -78,7 +78,7 @@ Leave one open issue in that repository. The token's user needs permission to la
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `repo` | `krantikaridev/hermes-orchestrator-sandbox` | `owner/name`. OPEN DECISION placeholder |
+| `repo` | _(required, no default)_ | `owner/name`, for example `owner/example-repo` |
 | `auth_method` | `pat` | `pat` or `oauth` |
 | `queue_label` | empty | Auto-claim only issues with this label |
 | `queue_assignee` | empty | Login, `none` for unassigned, or empty for no filter |
@@ -138,7 +138,7 @@ Token counts are the provider usage reported on `post_api_request` for that sess
 
 ## 90-second demo
 
-PAT path only. Replace the repository if you are not using the sandbox placeholder. Have one open issue there first.
+PAT path only. Replace `owner/example-repo` with a repository you control and have at least one open issue there first.
 
 ```bash
 # 0:00
@@ -148,7 +148,7 @@ hermes plugins install https://github.com/krantikaridev/hermes-issue-orchestrato
 read -rs PAT
 hermes config set HERMES_ISSUE_ORCHESTRATOR_GITHUB_TOKEN "$PAT"
 unset PAT
-hermes config set plugins.entries.hermes-issue-orchestrator.settings.repo krantikaridev/hermes-orchestrator-sandbox
+hermes config set plugins.entries.hermes-issue-orchestrator.settings.repo owner/example-repo
 
 # 0:45
 hermes
@@ -185,7 +185,7 @@ hermes plugins validate /path/to/hermes-issue-orchestrator --install-deps
 
 ## Tested
 
-End to end on Hermes v0.23.1 (10 Nov 2026) against a sandbox repository with example issues, using a free local model (Qwen2.5-3B-Instruct GGUF on llama.cpp, 64K context, `tools.tool_search.enabled: off`, toolset `hermes-issue-orchestrator`). One turn claimed an issue and posted a note; the `post_llm_call` hook then posted the turn's progress line with token counts; a resumed turn released the issue. Small local models work best with tool search off so the three tools are sent directly.
+End to end on Hermes v0.23.1 (10 Nov 2026) against a repository with example issues, using a free local model (Qwen2.5-3B-Instruct GGUF on llama.cpp, 64K context, `tools.tool_search.enabled: off`, toolset `hermes-issue-orchestrator`). One turn claimed an issue and posted a note; the `post_llm_call` hook then posted the turn's progress line with token counts; a resumed turn released the issue. Small local models work best with tool search off so the three tools are sent directly.
 
 ## Catalog draft
 
@@ -205,6 +205,5 @@ Done:
 
 Not included:
 
-- Creating the sandbox repository. That default is an OPEN DECISION.
 - Opening the upstream catalog PR, or pinning `sha` to a reviewed commit.
 - GitHub webhooks, Projects, multi-repo queues, or writing code for the issue. The agent does the work with Hermes's own tools; this plugin is the queue.

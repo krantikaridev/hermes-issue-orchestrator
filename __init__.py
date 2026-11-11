@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from .errors import OrchestratorError
 from .schemas import CLAIM, COMMENT_PROGRESS, HANDOFF
 from .service import claim_issue, comment_progress, handoff_issue, issues_text, note_tokens, note_turn, run_tool
 from .settings import load_settings
@@ -37,16 +38,25 @@ def register(ctx: object) -> None:
                 usage=usage if usage is not None else kwargs.get("usage"),
                 api_request_id=str(api_request_id or kwargs.get("api_request_id") or ""),
             )
+        except OrchestratorError as exc:
+            logger.warning("post_api_request skipped: %s", exc)
+            return str(exc)
         except Exception as exc:
             logger.warning("post_api_request token note skipped: %s", type(exc).__name__)
 
     def on_llm(session_id="", assistant_response="", **kwargs):
         del kwargs
-        note_turn(settings(), session_id=str(session_id or ""), assistant_response=str(assistant_response or ""))
+        try:
+            note_turn(settings(), session_id=str(session_id or ""), assistant_response=str(assistant_response or ""))
+        except OrchestratorError as exc:
+            logger.warning("post_llm_call skipped: %s", exc)
+            return str(exc)
 
     def on_issues(raw_args="", **kwargs):
         try:
             return issues_text(settings(), str(raw_args or ""), session_id=_session(kwargs))
+        except OrchestratorError as exc:
+            return str(exc)
         except Exception as exc:
             logger.warning("issues command failed: %s", type(exc).__name__)
             return "Could not list issues."

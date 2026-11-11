@@ -13,7 +13,6 @@ version: "0.1.0"
 readme: true
 title: Hermes Issue Orchestrator
 known_issues:
-  - "Default repo krantikaridev/hermes-orchestrator-sandbox is an OPEN DECISION placeholder. Set the repo before use."
   - "sha above is a draft placeholder. Replace it with the reviewed commit before opening the catalog PR."
 capabilities:
   provides_tools:
